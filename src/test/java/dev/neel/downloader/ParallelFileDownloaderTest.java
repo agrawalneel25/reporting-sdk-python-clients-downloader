@@ -29,7 +29,10 @@ public final class ParallelFileDownloaderTest {
                 new TestCase("downloads exact bytes", ParallelFileDownloaderTest::downloadsExactBytes),
                 new TestCase("uses parallel range requests", ParallelFileDownloaderTest::usesParallelRangeRequests),
                 new TestCase("retries transient chunk failure", ParallelFileDownloaderTest::retriesTransientChunkFailure),
-                new TestCase("rejects server without range support", ParallelFileDownloaderTest::rejectsServerWithoutRangeSupport)
+                new TestCase("does not overcount progress after retry", ParallelFileDownloaderTest::doesNotOvercountProgressAfterRetry),
+                new TestCase("rejects server without range support", ParallelFileDownloaderTest::rejectsServerWithoutRangeSupport),
+                new TestCase("rejects wrong Content-Range", ParallelFileDownloaderTest::rejectsWrongContentRange),
+                new TestCase("removes partial file after failure", ParallelFileDownloaderTest::removesPartialFileAfterFailure)
         );
 
         for (TestCase test : tests) {
@@ -119,6 +122,70 @@ public final class ParallelFileDownloaderTest {
         }
     }
 
+    private static void doesNotOvercountProgressAfterRetry() throws Exception {
+        byte[] source = bytes(300_000);
+        try (RangeTestServer server = RangeTestServer.start(source)) {
+            server.failFirstGetForStart(0);
+            AtomicLong progress = new AtomicLong();
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+
+            DownloadConfig config = DownloadConfig.builder()
+                    .chunkSizeBytes(100_000)
+                    .workers(3)
+                    .maxAttempts(2)
+                    .requestTimeout(Duration.ofSeconds(5))
+                    .progressListener(progress::set)
+                    .build();
+
+            new ParallelFileDownloader(config).download(server.uri(), target);
+            assertEquals(source.length, progress.get(), "progress");
+        }
+    }
+
+    private static void rejectsWrongContentRange() throws Exception {
+        byte[] source = bytes(2048);
+        try (RangeTestServer server = RangeTestServer.start(source)) {
+            server.shiftContentRangeHeaderByOne(true);
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+
+            DownloadConfig config = DownloadConfig.builder()
+                    .chunkSizeBytes(512)
+                    .workers(2)
+                    .maxAttempts(1)
+                    .requestTimeout(Duration.ofSeconds(5))
+                    .build();
+
+            IOException error = expectThrows(IOException.class, () ->
+                    new ParallelFileDownloader(config).download(server.uri(), target)
+            );
+            assertTrue(error.getMessage().contains("Content-Range"), "unexpected error: " + error.getMessage());
+        }
+    }
+
+    private static void removesPartialFileAfterFailure() throws Exception {
+        byte[] source = bytes(2048);
+        try (RangeTestServer server = RangeTestServer.start(source)) {
+            server.shiftContentRangeHeaderByOne(true);
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+            Path partial = target.resolveSibling(target.getFileName() + ".part");
+
+            DownloadConfig config = DownloadConfig.builder()
+                    .chunkSizeBytes(512)
+                    .workers(2)
+                    .maxAttempts(1)
+                    .requestTimeout(Duration.ofSeconds(5))
+                    .build();
+
+            expectThrows(IOException.class, () ->
+                    new ParallelFileDownloader(config).download(server.uri(), target)
+            );
+            assertTrue(!Files.exists(partial), "partial file was left behind: " + partial);
+        }
+    }
+
     private static byte[] bytes(int length) {
         byte[] data = new byte[length];
         for (int i = 0; i < data.length; i++) {
@@ -185,6 +252,7 @@ public final class ParallelFileDownloaderTest {
         private final AtomicLong failFirstStart = new AtomicLong(-1);
         private volatile boolean failFirstArmed;
         private volatile boolean advertiseRanges = true;
+        private volatile boolean shiftContentRangeHeaderByOne;
         private volatile int sleepPerRequestMillis;
 
         private RangeTestServer(byte[] content, HttpServer server, ExecutorService executor) {
@@ -218,6 +286,10 @@ public final class ParallelFileDownloaderTest {
         void failFirstGetForStart(long start) {
             failFirstStart.set(start);
             failFirstArmed = true;
+        }
+
+        void shiftContentRangeHeaderByOne(boolean shiftContentRangeHeaderByOne) {
+            this.shiftContentRangeHeaderByOne = shiftContentRangeHeaderByOne;
         }
 
         int maxConcurrentGets() {
@@ -266,9 +338,10 @@ public final class ParallelFileDownloaderTest {
                 }
 
                 int length = (int) (range.endInclusive() - range.start() + 1);
+                long headerStart = shiftContentRangeHeaderByOne ? range.start() + 1 : range.start();
                 Headers headers = exchange.getResponseHeaders();
                 headers.add("Accept-Ranges", "bytes");
-                headers.add("Content-Range", "bytes " + range.start() + "-" + range.endInclusive() + "/" + content.length);
+                headers.add("Content-Range", "bytes " + headerStart + "-" + range.endInclusive() + "/" + content.length);
                 headers.add("Content-Length", Integer.toString(length));
                 exchange.sendResponseHeaders(206, length);
                 try (OutputStream body = exchange.getResponseBody()) {

@@ -33,10 +33,13 @@ Expected output:
 PASS downloads exact bytes
 PASS uses parallel range requests
 PASS retries transient chunk failure
+PASS does not overcount progress after retry
 PASS rejects server without range support
+PASS rejects wrong Content-Range
+PASS removes partial file after failure
 ```
 
-The tests start an in-process HTTP server using `com.sun.net.httpserver.HttpServer`. The server supports `HEAD`, byte ranges, delayed responses, and one forced transient failure. That lets the tests check correctness, parallelism, retry behavior, and validation without relying on a live external server.
+The tests start an in-process HTTP server using `com.sun.net.httpserver.HttpServer`. The server supports `HEAD`, byte ranges, delayed responses, malformed range metadata, and one forced transient failure. That lets the tests check correctness, parallelism, retry behavior, response validation, and failure cleanup without relying on a live external server.
 
 ## Run against a local Apache server
 
@@ -50,15 +53,17 @@ Compile and run:
 
 ```powershell
 .\run-tests.ps1
-java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin 1048576 8
+java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-bytes 1048576 --workers 8
 ```
 
 Arguments:
 
 - URL
 - output path
-- chunk size in bytes, optional
-- worker count, optional
+- `--chunk-bytes`, optional, default 1048576
+- `--workers`, optional, default is at least 2
+- `--attempts`, optional, default 3
+- `--timeout-seconds`, optional, default 30
 
 ## Files
 
@@ -69,5 +74,4 @@ Arguments:
 
 ## Limits
 
-This version assumes the server follows the contract in the task: it must return `Accept-Ranges: bytes`, a valid `Content-Length`, and `206 Partial Content` for range requests. I did not add resume-from-existing-file support because the task asks for a downloader that assembles one complete file, and retrying individual chunks covers the failure case I wanted to test.
-
+This version assumes the server follows the contract in the task: it must return `Accept-Ranges: bytes`, a valid `Content-Length`, and `206 Partial Content` for range requests. For each chunk, the downloader also checks `Content-Length` and `Content-Range` before accepting the response. I did not add resume-from-existing-file support because the task asks for a downloader that assembles one complete file, and retrying individual chunks covers the failure case I wanted to test.

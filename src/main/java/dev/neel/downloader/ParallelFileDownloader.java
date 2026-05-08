@@ -17,6 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -48,21 +50,28 @@ public final class ParallelFileDownloader {
 
         ExecutorService executor = Executors.newFixedThreadPool(config.workers());
         AtomicLong totalWritten = new AtomicLong();
+        boolean completed = false;
 
-        try (FileChannel file = FileChannel.open(
-                partial,
-                StandardOpenOption.CREATE_NEW,
-                StandardOpenOption.WRITE
-        )) {
-            file.truncate(remoteFile.length());
+        try {
+            try (FileChannel file = FileChannel.open(
+                    partial,
+                    StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE
+            )) {
+                file.truncate(remoteFile.length());
 
-            List<Future<Void>> futures = new ArrayList<>(chunks.size());
-            for (Chunk chunk : chunks) {
-                futures.add(executor.submit(downloadChunk(source, chunk, file, totalWritten)));
+                List<Future<Void>> futures = new ArrayList<>(chunks.size());
+                for (Chunk chunk : chunks) {
+                    futures.add(executor.submit(downloadChunk(source, chunk, file, totalWritten)));
+                }
+                waitForAll(futures);
             }
-            waitForAll(futures);
+            completed = true;
         } finally {
             executor.shutdownNow();
+            if (!completed) {
+                Files.deleteIfExists(partial);
+            }
         }
 
         Files.move(partial, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
@@ -133,6 +142,7 @@ public final class ParallelFileDownloader {
         if (response.statusCode() != 206) {
             throw new IOException("Range GET for " + chunk + " returned HTTP " + response.statusCode());
         }
+        validateRangeResponse(response, chunk);
 
         long expected = chunk.length();
         long writtenForChunk = 0;
@@ -146,13 +156,31 @@ public final class ParallelFileDownloader {
                 }
                 writeFully(file, ByteBuffer.wrap(buffer, 0, read), chunk.start() + writtenForChunk);
                 writtenForChunk += read;
-                long current = totalWritten.addAndGet(read);
-                config.progressListener().accept(current);
             }
         }
 
         if (writtenForChunk != expected) {
             throw new IOException("Range GET for " + chunk + " returned " + writtenForChunk + " bytes, expected " + expected);
+        }
+        long current = totalWritten.addAndGet(writtenForChunk);
+        config.progressListener().accept(current);
+    }
+
+    private static void validateRangeResponse(HttpResponse<?> response, Chunk chunk) throws IOException {
+        OptionalLong contentLength = response.headers().firstValueAsLong("Content-Length");
+        if (contentLength.isPresent() && contentLength.getAsLong() != chunk.length()) {
+            throw new IOException("Content-Length for " + chunk + " was " + contentLength.getAsLong()
+                    + ", expected " + chunk.length());
+        }
+
+        Optional<String> contentRange = response.headers().firstValue("Content-Range");
+        if (contentRange.isEmpty()) {
+            throw new IOException("Range GET for " + chunk + " did not include Content-Range");
+        }
+
+        ContentRange parsed = ContentRange.parse(contentRange.get());
+        if (parsed.start() != chunk.start() || parsed.endInclusive() != chunk.endInclusive()) {
+            throw new IOException("Content-Range for " + chunk + " was " + contentRange.get());
         }
     }
 
@@ -202,5 +230,30 @@ public final class ParallelFileDownloader {
             return endInclusive - start + 1;
         }
     }
-}
 
+    private record ContentRange(long start, long endInclusive) {
+        static ContentRange parse(String header) throws IOException {
+            String prefix = "bytes ";
+            if (!header.startsWith(prefix)) {
+                throw new IOException("Unsupported Content-Range: " + header);
+            }
+
+            int dash = header.indexOf('-', prefix.length());
+            int slash = header.indexOf('/', dash + 1);
+            if (dash < 0 || slash < 0) {
+                throw new IOException("Bad Content-Range: " + header);
+            }
+
+            try {
+                long start = Long.parseLong(header.substring(prefix.length(), dash));
+                long end = Long.parseLong(header.substring(dash + 1, slash));
+                if (start < 0 || end < start) {
+                    throw new IOException("Bad Content-Range: " + header);
+                }
+                return new ContentRange(start, end);
+            } catch (NumberFormatException e) {
+                throw new IOException("Bad Content-Range: " + header, e);
+            }
+        }
+    }
+}

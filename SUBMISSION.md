@@ -20,6 +20,8 @@ The solution supports:
 - request timeout
 - progress callback
 - validation that the server supports byte ranges
+- validation that every chunk response matches the requested `Content-Range`
+- cleanup of the `.part` file if the download fails
 
 I also added a small CLI:
 
@@ -30,7 +32,7 @@ src/main/java/dev/neel/downloader/Main.java
 Example:
 
 ```powershell
-java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin 1048576 8
+java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-bytes 1048576 --workers 8
 ```
 
 The tests are in:
@@ -44,7 +46,10 @@ They start a local HTTP server in-process and verify:
 - byte-for-byte correctness on a multi-chunk file
 - actual parallel range requests
 - retry after one transient chunk failure
+- progress accounting after retry
 - rejection of a server that does not advertise byte range support
+- rejection of a wrong `Content-Range`
+- cleanup of partial output after failure
 
 I kept the project dependency-free so it can run with only a JDK. On my machine, this command passes:
 
@@ -58,6 +63,8 @@ Output:
 PASS downloads exact bytes
 PASS uses parallel range requests
 PASS retries transient chunk failure
+PASS does not overcount progress after retry
 PASS rejects server without range support
+PASS rejects wrong Content-Range
+PASS removes partial file after failure
 ```
-
