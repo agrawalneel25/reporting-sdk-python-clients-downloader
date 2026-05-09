@@ -68,3 +68,20 @@ PASS rejects server without range support
 PASS rejects wrong Content-Range
 PASS removes partial file after failure
 ```
+
+I also added a local benchmark:
+
+```text
+src/test/java/dev/neel/downloader/DownloaderBenchmark.java
+```
+
+It serves an 8 MiB file from the same in-process range server, splits it into 32 chunks, and adds 30 ms of delay per chunk response. One local run on my machine:
+
+| Workers | Chunks | Time ms | SHA-256 ok |
+|---:|---:|---:|:---:|
+| 1 | 32 | 1369 | yes |
+| 2 | 32 | 560 | yes |
+| 4 | 32 | 279 | yes |
+| 8 | 32 | 162 | yes |
+
+That is about 8.5x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.

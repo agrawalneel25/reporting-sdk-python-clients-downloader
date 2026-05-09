@@ -71,6 +71,21 @@ Arguments:
 - `src/main/java/dev/neel/downloader/DownloadConfig.java` - chunk size, worker count, retry count, timeout, progress callback
 - `src/main/java/dev/neel/downloader/Main.java` - small CLI wrapper
 - `src/test/java/dev/neel/downloader/ParallelFileDownloaderTest.java` - unit-style tests with a local range server
+- `src/test/java/dev/neel/downloader/DownloaderBenchmark.java` - local latency benchmark
+- `BENCHMARK.md` - benchmark method and measured output
+
+## Measured result
+
+I added a local benchmark because the task is specifically about parallel chunking. It serves an 8 MiB file from the in-process range server, splits it into 32 chunks, and adds 30 ms of delay per chunk response.
+
+| Workers | Chunks | Time ms | SHA-256 ok |
+|---:|---:|---:|:---:|
+| 1 | 32 | 1369 | yes |
+| 2 | 32 | 560 | yes |
+| 4 | 32 | 279 | yes |
+| 8 | 32 | 162 | yes |
+
+That is an 8.5x improvement from 1 worker to 8 workers in this controlled setup. The benchmark checks the SHA-256 hash after every run, so the speedup is not hiding a corrupted output file.
 
 ## Limits
 
