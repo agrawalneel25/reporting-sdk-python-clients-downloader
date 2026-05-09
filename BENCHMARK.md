@@ -15,11 +15,11 @@ One local run on my machine:
 
 | Workers | Chunks | Time ms | SHA-256 ok |
 |---:|---:|---:|:---:|
-| 1 | 32 | 1369 | yes |
-| 2 | 32 | 560 | yes |
-| 4 | 32 | 279 | yes |
-| 8 | 32 | 162 | yes |
+| 1 | 32 | 1398 | yes |
+| 2 | 32 | 570 | yes |
+| 4 | 32 | 299 | yes |
+| 8 | 32 | 179 | yes |
 
-The 8-worker run is about 8.5x faster than the 1-worker run in this setup. The important point is not the exact number, it is that the downloader actually overlaps range requests and still produces identical bytes.
+The 8-worker run is about 7.8x faster than the 1-worker run in this setup. The important point is not the exact number, it is that the downloader actually overlaps range requests and still produces identical bytes.
 
 

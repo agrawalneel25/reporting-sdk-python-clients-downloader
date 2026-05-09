@@ -22,7 +22,9 @@ public final class ParallelFileDownloaderTest {
                 new TestCase("does not overcount progress after retry", ParallelFileDownloaderTest::doesNotOvercountProgressAfterRetry),
                 new TestCase("rejects server without range support", ParallelFileDownloaderTest::rejectsServerWithoutRangeSupport),
                 new TestCase("rejects wrong Content-Range", ParallelFileDownloaderTest::rejectsWrongContentRange),
-                new TestCase("removes partial file after failure", ParallelFileDownloaderTest::removesPartialFileAfterFailure)
+                new TestCase("removes partial file after failure", ParallelFileDownloaderTest::removesPartialFileAfterFailure),
+                new TestCase("resumes from completed chunks", ParallelFileDownloaderTest::resumesFromCompletedChunks),
+                new TestCase("does not resume without identity headers", ParallelFileDownloaderTest::doesNotResumeWithoutIdentityHeaders)
         );
 
         for (TestCase test : tests) {
@@ -173,6 +175,72 @@ public final class ParallelFileDownloaderTest {
                     new ParallelFileDownloader(config).download(server.uri(), target)
             );
             assertTrue(!Files.exists(partial), "partial file was left behind: " + partial);
+        }
+    }
+
+    private static void resumesFromCompletedChunks() throws Exception {
+        byte[] source = bytes(300_000);
+        try (RangeHttpFixture server = RangeHttpFixture.start(source)) {
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+            Path partial = target.resolveSibling(target.getFileName() + ".part");
+            Path manifest = target.resolveSibling(target.getFileName() + ".part.manifest");
+
+            DownloadConfig config = DownloadConfig.builder()
+                    .chunkSizeBytes(100_000)
+                    .workers(1)
+                    .maxAttempts(1)
+                    .requestTimeout(Duration.ofSeconds(5))
+                    .resumeEnabled(true)
+                    .build();
+
+            server.failEveryGetForStart(100_000);
+            expectThrows(IOException.class, () ->
+                    new ParallelFileDownloader(config).download(server.uri(), target)
+            );
+            assertTrue(Files.exists(partial), "resume partial file missing");
+            assertTrue(Files.exists(manifest), "resume manifest missing");
+            int firstRunRequests = server.requestedStarts().size();
+
+            server.stopFailingEveryGet();
+            DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
+
+            assertArrayEquals(source, Files.readAllBytes(target), "resumed download was corrupt");
+            assertTrue(result.resumed(), "result did not report resume");
+            assertTrue(result.reusedChunks() >= 1, "expected at least one reused chunk");
+            List<Long> secondRunStarts = server.requestedStarts().subList(firstRunRequests, server.requestedStarts().size());
+            assertTrue(!secondRunStarts.contains(0L), "second run re-requested the completed first chunk");
+        }
+    }
+
+    private static void doesNotResumeWithoutIdentityHeaders() throws Exception {
+        byte[] source = bytes(300_000);
+        try (RangeHttpFixture server = RangeHttpFixture.start(source)) {
+            server.identityHeaders("", "");
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+
+            DownloadConfig config = DownloadConfig.builder()
+                    .chunkSizeBytes(100_000)
+                    .workers(1)
+                    .maxAttempts(1)
+                    .requestTimeout(Duration.ofSeconds(5))
+                    .resumeEnabled(true)
+                    .build();
+
+            server.failEveryGetForStart(100_000);
+            expectThrows(IOException.class, () ->
+                    new ParallelFileDownloader(config).download(server.uri(), target)
+            );
+            int firstRunRequests = server.requestedStarts().size();
+
+            server.stopFailingEveryGet();
+            DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
+
+            assertArrayEquals(source, Files.readAllBytes(target), "fresh retry was corrupt");
+            assertTrue(!result.resumed(), "download resumed without identity headers");
+            List<Long> secondRunStarts = server.requestedStarts().subList(firstRunRequests, server.requestedStarts().size());
+            assertTrue(secondRunStarts.contains(0L), "fresh retry did not request the first chunk");
         }
     }
 

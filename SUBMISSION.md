@@ -24,6 +24,7 @@ The solution supports:
 - validation that the server supports byte ranges
 - validation that every chunk response matches the requested `Content-Range`
 - cleanup of the `.part` file if the download fails
+- optional resume from completed chunks when the server exposes stable identity headers
 
 I also added a small CLI:
 
@@ -34,7 +35,7 @@ src/main/java/dev/neel/downloader/Main.java
 Example:
 
 ```powershell
-java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-bytes 1048576 --workers 8
+java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-bytes 1048576 --workers 8 --resume true
 ```
 
 The tests are in:
@@ -52,6 +53,7 @@ They start a local HTTP server in-process and verify:
 - rejection of a server that does not advertise byte range support
 - rejection of a wrong `Content-Range`
 - cleanup of partial output after failure
+- safe resume from already completed chunks
 
 I kept the project dependency-free so it can run with only a JDK. On my machine, this command passes:
 
@@ -69,6 +71,8 @@ PASS does not overcount progress after retry
 PASS rejects server without range support
 PASS rejects wrong Content-Range
 PASS removes partial file after failure
+PASS resumes from completed chunks
+PASS does not resume without identity headers
 ```
 
 I also added a local benchmark:
@@ -81,11 +85,11 @@ It serves an 8 MiB file from the same in-process range server, splits it into 32
 
 | Workers | Chunks | Time ms | SHA-256 ok |
 |---:|---:|---:|:---:|
-| 1 | 32 | 1369 | yes |
-| 2 | 32 | 560 | yes |
-| 4 | 32 | 279 | yes |
-| 8 | 32 | 162 | yes |
+| 1 | 32 | 1398 | yes |
+| 2 | 32 | 570 | yes |
+| 4 | 32 | 299 | yes |
+| 8 | 32 | 179 | yes |
 
-That is about 8.5x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.
+That is about 7.8x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.
 
-The main thing I would add next is resume support for interrupted downloads. I left it out because a safe resume needs a way to prove the `.part` file belongs to the same remote object, for example with `ETag` or `Last-Modified`, and the task server contract does not mention those headers.
+The tie-in I had in mind for the Data Ingestion projects is that SDK downloads should fail loudly and be resumable when the server gives enough metadata. A reporting SDK client that silently accepts a corrupt export is worse than one that errors; downstream analysis can look valid while being wrong. That is why I spent most of the extra work on range validation, `.part` cleanup, and conservative resume semantics rather than adding unrelated features.

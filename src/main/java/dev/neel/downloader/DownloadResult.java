@@ -8,7 +8,8 @@ public record DownloadResult(
         Path destination,
         long bytesDownloaded,
         int chunkCount,
-        int workerCount
+        int workerCount,
+        int reusedChunks,
+        boolean resumed
 ) {
 }
-

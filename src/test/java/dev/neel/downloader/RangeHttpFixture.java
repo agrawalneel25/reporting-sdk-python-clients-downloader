@@ -12,6 +12,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 final class RangeHttpFixture implements AutoCloseable {
     private final byte[] content;
@@ -21,9 +24,13 @@ final class RangeHttpFixture implements AutoCloseable {
     private final AtomicInteger maxConcurrentGets = new AtomicInteger();
     private final AtomicInteger getCount = new AtomicInteger();
     private final AtomicLong failFirstStart = new AtomicLong(-1);
+    private final AtomicLong failAlwaysStart = new AtomicLong(-1);
+    private final List<Long> requestedStarts = Collections.synchronizedList(new ArrayList<>());
     private volatile boolean failFirstArmed;
     private volatile boolean advertiseRanges = true;
     private volatile boolean shiftContentRangeHeaderByOne;
+    private volatile String etag = "\"fixture-v1\"";
+    private volatile String lastModified = "Mon, 11 May 2026 12:00:00 GMT";
     private volatile int sleepPerRequestMillis;
 
     private RangeHttpFixture(byte[] content, HttpServer server, ExecutorService executor) {
@@ -59,8 +66,21 @@ final class RangeHttpFixture implements AutoCloseable {
         failFirstArmed = true;
     }
 
+    void failEveryGetForStart(long start) {
+        failAlwaysStart.set(start);
+    }
+
+    void stopFailingEveryGet() {
+        failAlwaysStart.set(-1);
+    }
+
     void shiftContentRangeHeaderByOne(boolean shiftContentRangeHeaderByOne) {
         this.shiftContentRangeHeaderByOne = shiftContentRangeHeaderByOne;
+    }
+
+    void identityHeaders(String etag, String lastModified) {
+        this.etag = etag;
+        this.lastModified = lastModified;
     }
 
     int maxConcurrentGets() {
@@ -69,6 +89,12 @@ final class RangeHttpFixture implements AutoCloseable {
 
     int getCount() {
         return getCount.get();
+    }
+
+    List<Long> requestedStarts() {
+        synchronized (requestedStarts) {
+            return List.copyOf(requestedStarts);
+        }
     }
 
     private void handle(HttpExchange exchange) throws IOException {
@@ -91,6 +117,12 @@ final class RangeHttpFixture implements AutoCloseable {
             headers.add("Accept-Ranges", "bytes");
         }
         headers.add("Content-Length", Integer.toString(content.length));
+        if (!etag.isBlank()) {
+            headers.add("ETag", etag);
+        }
+        if (!lastModified.isBlank()) {
+            headers.add("Last-Modified", lastModified);
+        }
         exchange.sendResponseHeaders(200, -1);
     }
 
@@ -100,6 +132,11 @@ final class RangeHttpFixture implements AutoCloseable {
         getCount.incrementAndGet();
         try {
             Range range = parseRange(exchange.getRequestHeaders().getFirst("Range"));
+            requestedStarts.add(range.start());
+            if (failAlwaysStart.get() == range.start()) {
+                exchange.sendResponseHeaders(500, -1);
+                return;
+            }
             if (shouldFailOnce(range.start())) {
                 exchange.sendResponseHeaders(500, -1);
                 return;
@@ -161,4 +198,3 @@ final class RangeHttpFixture implements AutoCloseable {
     private record Range(long start, long endInclusive) {
     }
 }
-

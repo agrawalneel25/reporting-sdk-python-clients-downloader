@@ -25,6 +25,7 @@ I made three choices deliberately:
 
 - Direct offset writes instead of download-then-concat. That keeps memory bounded by worker count and buffer size, not file size.
 - A strict server contract. The task says the server supports `HEAD`, `Accept-Ranges`, `Content-Length`, and ranged `GET`; the downloader rejects responses that drift from that contract instead of silently accepting a corrupt file.
+- Resume only when safe. The optional resume mode reuses a `.part` file only when the sidecar manifest matches the URL, length, chunk size, `ETag`, and `Last-Modified`.
 - No external build dependency. The repo compiles with only the JDK, which makes review simpler on a fresh machine.
 
 ## Run the tests
@@ -45,6 +46,8 @@ PASS does not overcount progress after retry
 PASS rejects server without range support
 PASS rejects wrong Content-Range
 PASS removes partial file after failure
+PASS resumes from completed chunks
+PASS does not resume without identity headers
 ```
 
 The tests start an in-process HTTP server using `com.sun.net.httpserver.HttpServer`. The server supports `HEAD`, byte ranges, delayed responses, malformed range metadata, and one forced transient failure. That lets the tests check correctness, parallelism, retry behavior, response validation, and failure cleanup without relying on a live external server.
@@ -61,7 +64,7 @@ Compile and run:
 
 ```powershell
 .\run-tests.ps1
-java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-bytes 1048576 --workers 8
+java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-bytes 1048576 --workers 8 --resume true
 ```
 
 Arguments:
@@ -72,6 +75,7 @@ Arguments:
 - `--workers`, optional, default is at least 2
 - `--attempts`, optional, default 3
 - `--timeout-seconds`, optional, default 30
+- `--resume`, optional, default false
 
 ## Files
 
@@ -81,6 +85,7 @@ Arguments:
 - `src/test/java/dev/neel/downloader/ParallelFileDownloaderTest.java` - unit-style tests with a local range server
 - `src/test/java/dev/neel/downloader/DownloaderBenchmark.java` - local latency benchmark
 - `BENCHMARK.md` - benchmark method and measured output
+- `ENGINEERING_NOTES.md` - iteration notes, failure cases, and Data Ingestion framing
 
 ## Measured result
 
@@ -88,15 +93,15 @@ I added a local benchmark because the task is specifically about parallel chunki
 
 | Workers | Chunks | Time ms | SHA-256 ok |
 |---:|---:|---:|:---:|
-| 1 | 32 | 1369 | yes |
-| 2 | 32 | 560 | yes |
-| 4 | 32 | 279 | yes |
-| 8 | 32 | 162 | yes |
+| 1 | 32 | 1398 | yes |
+| 2 | 32 | 570 | yes |
+| 4 | 32 | 299 | yes |
+| 8 | 32 | 179 | yes |
 
-That is an 8.5x improvement from 1 worker to 8 workers in this controlled setup. The benchmark checks the SHA-256 hash after every run, so the speedup is not hiding a corrupted output file.
+That is a 7.8x improvement from 1 worker to 8 workers in this controlled setup. The benchmark checks the SHA-256 hash after every run, so the speedup is not hiding a corrupted output file.
 
 ## Limits
 
-This version assumes the server follows the contract in the task: it must return `Accept-Ranges: bytes`, a valid `Content-Length`, and `206 Partial Content` for range requests. For each chunk, the downloader also checks `Content-Length` and `Content-Range` before accepting the response. I did not add resume-from-existing-file support because the task asks for a downloader that assembles one complete file, and retrying individual chunks covers the failure case I wanted to test.
+This version assumes the server follows the contract in the task: it must return `Accept-Ranges: bytes`, a valid `Content-Length`, and `206 Partial Content` for range requests. For each chunk, the downloader also checks `Content-Length` and `Content-Range` before accepting the response.
 
-If I had another pass, I would add resume support by reading the `.part` file length and only scheduling missing ranges. I left that out because it changes the failure model: now the downloader has to prove the partial file belongs to the same remote object, likely with `ETag` or `Last-Modified`, and the task server contract does not mention either header.
+Resume mode is intentionally conservative. If the server does not expose `ETag` or `Last-Modified`, the downloader starts clean because it cannot prove that the old `.part` file belongs to the current remote object. If I had another pass, I would add a hash-based resume mode for servers that publish checksums.

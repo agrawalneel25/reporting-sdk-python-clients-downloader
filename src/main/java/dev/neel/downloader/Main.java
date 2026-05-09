@@ -13,7 +13,7 @@ public final class Main {
         CliArgs cli = CliArgs.parse(args);
         if (cli == null) {
             System.err.println("Usage: java dev.neel.downloader.Main <url> <output-path> "
-                    + "[--chunk-bytes N] [--workers N] [--attempts N] [--timeout-seconds N]");
+                    + "[--chunk-bytes N] [--workers N] [--attempts N] [--timeout-seconds N] [--resume true|false]");
             System.exit(2);
         }
 
@@ -24,6 +24,7 @@ public final class Main {
                 .workers(cli.workers())
                 .maxAttempts(cli.attempts())
                 .requestTimeout(Duration.ofSeconds(cli.timeoutSeconds()))
+                .resumeEnabled(cli.resume())
                 .progressListener(done -> {
                     long mib = done / (1024 * 1024);
                     if (mib > lastPrinted.getAndSet(mib)) {
@@ -36,6 +37,9 @@ public final class Main {
         DownloadResult result = downloader.download(URI.create(cli.url()), Path.of(cli.outputPath()));
         System.out.println("downloaded " + result.bytesDownloaded() + " bytes to " + result.destination());
         System.out.println("chunks=" + result.chunkCount() + ", workers=" + result.workerCount());
+        if (result.resumed()) {
+            System.out.println("resumed from " + result.reusedChunks() + " completed chunks");
+        }
     }
 
     private record CliArgs(
@@ -44,7 +48,8 @@ public final class Main {
             int chunkBytes,
             int workers,
             int attempts,
-            int timeoutSeconds
+            int timeoutSeconds,
+            boolean resume
     ) {
         static CliArgs parse(String[] args) {
             if (args.length < 2) {
@@ -57,6 +62,7 @@ public final class Main {
             int workers = Math.max(2, Runtime.getRuntime().availableProcessors());
             int attempts = 3;
             int timeoutSeconds = 30;
+            boolean resume = false;
 
             int i = 2;
             while (i < args.length) {
@@ -71,6 +77,7 @@ public final class Main {
                         case "--workers" -> workers = Integer.parseInt(value);
                         case "--attempts" -> attempts = Integer.parseInt(value);
                         case "--timeout-seconds" -> timeoutSeconds = Integer.parseInt(value);
+                        case "--resume" -> resume = Boolean.parseBoolean(value);
                         default -> {
                             return null;
                         }
@@ -81,7 +88,7 @@ public final class Main {
                 i += 2;
             }
 
-            return new CliArgs(url, outputPath, chunkBytes, workers, attempts, timeoutSeconds);
+            return new CliArgs(url, outputPath, chunkBytes, workers, attempts, timeoutSeconds, resume);
         }
     }
 }

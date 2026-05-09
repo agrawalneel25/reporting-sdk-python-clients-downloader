@@ -14,11 +14,14 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -46,23 +49,27 @@ public final class ParallelFileDownloader {
         List<Chunk> chunks = split(remoteFile.length(), config.chunkSizeBytes());
         Files.createDirectories(destination.toAbsolutePath().getParent());
         Path partial = destination.resolveSibling(destination.getFileName() + ".part");
-        Files.deleteIfExists(partial);
+        Path manifestPath = destination.resolveSibling(destination.getFileName() + ".part.manifest");
+        ResumeManifest manifest = preparePartial(source, remoteFile, chunks, partial, manifestPath);
 
         ExecutorService executor = Executors.newFixedThreadPool(config.workers());
-        AtomicLong totalWritten = new AtomicLong();
+        AtomicLong totalWritten = new AtomicLong(manifest.completedBytes());
         boolean completed = false;
 
         try {
             try (FileChannel file = FileChannel.open(
                     partial,
-                    StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.CREATE,
                     StandardOpenOption.WRITE
             )) {
                 file.truncate(remoteFile.length());
 
                 List<Future<Void>> futures = new ArrayList<>(chunks.size());
                 for (Chunk chunk : chunks) {
-                    futures.add(executor.submit(downloadChunk(source, chunk, file, totalWritten)));
+                    if (manifest.isCompleted(chunk)) {
+                        continue;
+                    }
+                    futures.add(executor.submit(downloadChunk(source, chunk, file, totalWritten, manifest)));
                 }
                 waitForAll(futures);
             }
@@ -70,12 +77,24 @@ public final class ParallelFileDownloader {
         } finally {
             executor.shutdownNow();
             if (!completed) {
-                Files.deleteIfExists(partial);
+                if (!config.resumeEnabled()) {
+                    Files.deleteIfExists(partial);
+                    Files.deleteIfExists(manifestPath);
+                }
             }
         }
 
         Files.move(partial, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        return new DownloadResult(source, destination, remoteFile.length(), chunks.size(), config.workers());
+        Files.deleteIfExists(manifestPath);
+        return new DownloadResult(
+                source,
+                destination,
+                remoteFile.length(),
+                chunks.size(),
+                config.workers(),
+                manifest.reusedChunks(),
+                manifest.reusedChunks() > 0
+        );
     }
 
     private RemoteFile inspect(URI source) throws IOException, InterruptedException {
@@ -103,20 +122,54 @@ public final class ParallelFileDownloader {
         if (contentLength < 0) {
             throw new IOException("Content-Length must not be negative");
         }
-        return new RemoteFile(contentLength);
+        return new RemoteFile(
+                contentLength,
+                response.headers().firstValue("ETag").orElse(""),
+                response.headers().firstValue("Last-Modified").orElse("")
+        );
+    }
+
+    private ResumeManifest preparePartial(
+            URI source,
+            RemoteFile remoteFile,
+            List<Chunk> chunks,
+            Path partial,
+            Path manifestPath
+    ) throws IOException {
+        if (!config.resumeEnabled()) {
+            Files.deleteIfExists(partial);
+            Files.deleteIfExists(manifestPath);
+            return ResumeManifest.fresh(source, remoteFile, chunks, manifestPath, config.chunkSizeBytes());
+        }
+
+        ResumeManifest existing = ResumeManifest.loadIfMatching(
+                source,
+                remoteFile,
+                chunks,
+                manifestPath,
+                config.chunkSizeBytes()
+        );
+        if (existing != null && Files.exists(partial) && Files.size(partial) == remoteFile.length()) {
+            return existing;
+        }
+
+        Files.deleteIfExists(partial);
+        Files.deleteIfExists(manifestPath);
+        return ResumeManifest.fresh(source, remoteFile, chunks, manifestPath, config.chunkSizeBytes());
     }
 
     private Callable<Void> downloadChunk(
             URI source,
             Chunk chunk,
             FileChannel file,
-            AtomicLong totalWritten
+            AtomicLong totalWritten,
+            ResumeManifest manifest
     ) {
         return () -> {
             IOException lastFailure = null;
             for (int attempt = 1; attempt <= config.maxAttempts(); attempt++) {
                 try {
-                    fetchChunk(source, chunk, file, totalWritten);
+                    fetchChunk(source, chunk, file, totalWritten, manifest);
                     return null;
                 } catch (IOException e) {
                     lastFailure = e;
@@ -130,7 +183,8 @@ public final class ParallelFileDownloader {
             URI source,
             Chunk chunk,
             FileChannel file,
-            AtomicLong totalWritten
+            AtomicLong totalWritten,
+            ResumeManifest manifest
     ) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder(source)
                 .GET()
@@ -162,6 +216,7 @@ public final class ParallelFileDownloader {
         if (writtenForChunk != expected) {
             throw new IOException("Range GET for " + chunk + " returned " + writtenForChunk + " bytes, expected " + expected);
         }
+        manifest.markCompleted(chunk);
         long current = totalWritten.addAndGet(writtenForChunk);
         config.progressListener().accept(current);
     }
@@ -222,12 +277,29 @@ public final class ParallelFileDownloader {
         return chunks;
     }
 
-    private record RemoteFile(long length) {
+    private record RemoteFile(long length, String etag, String lastModified) {
     }
 
     private record Chunk(long start, long endInclusive) {
         long length() {
             return endInclusive - start + 1;
+        }
+
+        static Chunk parse(String encoded) throws IOException {
+            int dash = encoded.indexOf('-');
+            if (dash < 0) {
+                throw new IOException("Bad completed chunk in manifest: " + encoded);
+            }
+            try {
+                long start = Long.parseLong(encoded.substring(0, dash));
+                long end = Long.parseLong(encoded.substring(dash + 1));
+                if (start < 0 || end < start) {
+                    throw new IOException("Bad completed chunk in manifest: " + encoded);
+                }
+                return new Chunk(start, end);
+            } catch (NumberFormatException e) {
+                throw new IOException("Bad completed chunk in manifest: " + encoded, e);
+            }
         }
     }
 
@@ -254,6 +326,148 @@ public final class ParallelFileDownloader {
             } catch (NumberFormatException e) {
                 throw new IOException("Bad Content-Range: " + header, e);
             }
+        }
+    }
+
+    private static final class ResumeManifest {
+        private final URI source;
+        private final RemoteFile remoteFile;
+        private final Path manifestPath;
+        private final int chunkSizeBytes;
+        private final Set<Chunk> completed;
+        private final int reusedChunks;
+
+        private ResumeManifest(
+                URI source,
+                RemoteFile remoteFile,
+                Path manifestPath,
+                int chunkSizeBytes,
+                Set<Chunk> completed,
+                int reusedChunks
+        ) {
+            this.source = source;
+            this.remoteFile = remoteFile;
+            this.manifestPath = manifestPath;
+            this.chunkSizeBytes = chunkSizeBytes;
+            this.completed = completed;
+            this.reusedChunks = reusedChunks;
+        }
+
+        static ResumeManifest fresh(
+                URI source,
+                RemoteFile remoteFile,
+                List<Chunk> chunks,
+                Path manifestPath,
+                int chunkSizeBytes
+        ) throws IOException {
+            ResumeManifest manifest = new ResumeManifest(
+                    source,
+                    remoteFile,
+                    manifestPath,
+                    chunkSizeBytes,
+                    new HashSet<>(),
+                    0
+            );
+            manifest.persist();
+            return manifest;
+        }
+
+        static ResumeManifest loadIfMatching(
+                URI source,
+                RemoteFile remoteFile,
+                List<Chunk> chunks,
+                Path manifestPath,
+                int chunkSizeBytes
+        ) throws IOException {
+            if (remoteFile.etag().isBlank() && remoteFile.lastModified().isBlank()) {
+                return null;
+            }
+            if (!Files.exists(manifestPath)) {
+                return null;
+            }
+
+            Properties properties = new Properties();
+            try (var input = Files.newInputStream(manifestPath)) {
+                properties.load(input);
+            }
+
+            if (!source.toString().equals(properties.getProperty("url"))) {
+                return null;
+            }
+            if (!Long.toString(remoteFile.length()).equals(properties.getProperty("length"))) {
+                return null;
+            }
+            if (!Integer.toString(chunkSizeBytes).equals(properties.getProperty("chunkSize"))) {
+                return null;
+            }
+            if (!remoteFile.etag().equals(properties.getProperty("etag", ""))) {
+                return null;
+            }
+            if (!remoteFile.lastModified().equals(properties.getProperty("lastModified", ""))) {
+                return null;
+            }
+
+            Set<Chunk> completed = new HashSet<>();
+            Set<Chunk> validChunks = new HashSet<>(chunks);
+            String encoded = properties.getProperty("completed", "");
+            if (!encoded.isBlank()) {
+                for (String token : encoded.split(",")) {
+                    Chunk chunk = Chunk.parse(token);
+                    if (validChunks.contains(chunk)) {
+                        completed.add(chunk);
+                    }
+                }
+            }
+            return new ResumeManifest(source, remoteFile, manifestPath, chunkSizeBytes, completed, completed.size());
+        }
+
+        synchronized boolean isCompleted(Chunk chunk) {
+            return completed.contains(chunk);
+        }
+
+        synchronized void markCompleted(Chunk chunk) throws IOException {
+            completed.add(chunk);
+            persist();
+        }
+
+        synchronized long completedBytes() {
+            long total = 0;
+            for (Chunk chunk : completed) {
+                total += chunk.length();
+            }
+            return total;
+        }
+
+        int reusedChunks() {
+            return reusedChunks;
+        }
+
+        private void persist() throws IOException {
+            Properties properties = new Properties();
+            properties.setProperty("url", source.toString());
+            properties.setProperty("length", Long.toString(remoteFile.length()));
+            properties.setProperty("chunkSize", Integer.toString(chunkSizeBytes));
+            properties.setProperty("etag", remoteFile.etag());
+            properties.setProperty("lastModified", remoteFile.lastModified());
+            properties.setProperty("completed", encodeCompleted());
+            try (var output = Files.newOutputStream(
+                    manifestPath,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE
+            )) {
+                properties.store(output, "parallel range downloader resume manifest");
+            }
+        }
+
+        private String encodeCompleted() {
+            List<Chunk> ordered = new ArrayList<>(completed);
+            ordered.sort((left, right) -> Long.compare(left.start(), right.start()));
+            List<String> encoded = new ArrayList<>(ordered.size());
+            for (Chunk chunk : ordered) {
+                encoded.add(chunk.start() + "-" + chunk.endInclusive());
+            }
+            return String.join(",", encoded);
         }
     }
 }

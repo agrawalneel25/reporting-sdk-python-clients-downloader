@@ -10,6 +10,7 @@ public final class DownloadConfig {
     private final int maxAttempts;
     private final Duration requestTimeout;
     private final LongConsumer progressListener;
+    private final boolean resumeEnabled;
 
     private DownloadConfig(Builder builder) {
         if (builder.chunkSizeBytes <= 0) {
@@ -26,6 +27,7 @@ public final class DownloadConfig {
         this.maxAttempts = builder.maxAttempts;
         this.requestTimeout = Objects.requireNonNull(builder.requestTimeout);
         this.progressListener = Objects.requireNonNull(builder.progressListener);
+        this.resumeEnabled = builder.resumeEnabled;
     }
 
     public int chunkSizeBytes() {
@@ -48,6 +50,10 @@ public final class DownloadConfig {
         return progressListener;
     }
 
+    public boolean resumeEnabled() {
+        return resumeEnabled;
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -62,6 +68,7 @@ public final class DownloadConfig {
         private int maxAttempts = 3;
         private Duration requestTimeout = Duration.ofSeconds(30);
         private LongConsumer progressListener = ignored -> { };
+        private boolean resumeEnabled;
 
         public Builder chunkSizeBytes(int chunkSizeBytes) {
             this.chunkSizeBytes = chunkSizeBytes;
@@ -88,9 +95,13 @@ public final class DownloadConfig {
             return this;
         }
 
+        public Builder resumeEnabled(boolean resumeEnabled) {
+            this.resumeEnabled = resumeEnabled;
+            return this;
+        }
+
         public DownloadConfig build() {
             return new DownloadConfig(this);
         }
     }
 }
-
