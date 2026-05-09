@@ -12,6 +12,8 @@ The downloader first sends a `HEAD` request and checks that the server advertise
 
 I write each chunk straight into its final offset using `FileChannel.write(buffer, position)`. That avoids keeping the full downloaded file in memory and avoids a separate concatenation step. The output is written to a `.part` file first, then moved into place after every chunk finishes.
 
+The main design choice is that I validate the server contract aggressively. A ranged response has to return `206 Partial Content`, a matching `Content-Range`, and the expected byte count. If any chunk fails that check, the partial file is deleted instead of leaving behind output that looks complete but is not trustworthy.
+
 The solution supports:
 
 - configurable chunk size
@@ -85,3 +87,5 @@ It serves an 8 MiB file from the same in-process range server, splits it into 32
 | 8 | 32 | 162 | yes |
 
 That is about 8.5x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.
+
+The main thing I would add next is resume support for interrupted downloads. I left it out because a safe resume needs a way to prove the `.part` file belongs to the same remote object, for example with `ETag` or `Last-Modified`, and the task server contract does not mention those headers.

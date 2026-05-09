@@ -19,6 +19,14 @@ Range: bytes=1048576-2097151
 
 Every chunk is written through `FileChannel.write(buffer, offset)`, so the downloader does not need to keep all chunks in memory before assembly. Failed chunk requests are retried. The final file is first written as `<name>.part` and moved into place only after all chunks finish.
 
+## Design choices
+
+I made three choices deliberately:
+
+- Direct offset writes instead of download-then-concat. That keeps memory bounded by worker count and buffer size, not file size.
+- A strict server contract. The task says the server supports `HEAD`, `Accept-Ranges`, `Content-Length`, and ranged `GET`; the downloader rejects responses that drift from that contract instead of silently accepting a corrupt file.
+- No external build dependency. The repo compiles with only the JDK, which makes review simpler on a fresh machine.
+
 ## Run the tests
 
 From this folder:
@@ -90,3 +98,5 @@ That is an 8.5x improvement from 1 worker to 8 workers in this controlled setup.
 ## Limits
 
 This version assumes the server follows the contract in the task: it must return `Accept-Ranges: bytes`, a valid `Content-Length`, and `206 Partial Content` for range requests. For each chunk, the downloader also checks `Content-Length` and `Content-Range` before accepting the response. I did not add resume-from-existing-file support because the task asks for a downloader that assembles one complete file, and retrying individual chunks covers the failure case I wanted to test.
+
+If I had another pass, I would add resume support by reading the `.part` file length and only scheduling missing ranges. I left that out because it changes the failure model: now the downloader has to prove the partial file belongs to the same remote object, likely with `ETag` or `Last-Modified`, and the task server contract does not mention either header.
