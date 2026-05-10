@@ -51,6 +51,9 @@ They start a local HTTP server in-process and verify:
 - retry after one transient chunk failure
 - progress accounting after retry
 - rejection of a server that does not advertise byte range support
+- rejection of a missing `Content-Length` on `HEAD`
+- rejection of a ranged response that returns `200 OK`
+- rejection of a truncated chunk body
 - rejection of a wrong `Content-Range`
 - cleanup of partial output after failure
 - safe resume from already completed chunks
@@ -69,6 +72,9 @@ PASS uses parallel range requests
 PASS retries transient chunk failure
 PASS does not overcount progress after retry
 PASS rejects server without range support
+PASS rejects missing HEAD content length
+PASS rejects range response with HTTP 200
+PASS rejects truncated chunk body
 PASS rejects wrong Content-Range
 PASS removes partial file after failure
 PASS resumes from completed chunks
@@ -85,11 +91,11 @@ It serves an 8 MiB file from the same in-process range server, splits it into 32
 
 | Workers | Chunks | Time ms | SHA-256 ok |
 |---:|---:|---:|:---:|
-| 1 | 32 | 1398 | yes |
-| 2 | 32 | 570 | yes |
-| 4 | 32 | 299 | yes |
-| 8 | 32 | 179 | yes |
+| 1 | 32 | 1386 | yes |
+| 2 | 32 | 591 | yes |
+| 4 | 32 | 308 | yes |
+| 8 | 32 | 170 | yes |
 
-That is about 7.8x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.
+That is about 8.2x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.
 
 The tie-in I had in mind for the Data Ingestion projects is that SDK downloads should fail loudly and be resumable when the server gives enough metadata. A reporting SDK client that silently accepts a corrupt export is worse than one that errors; downstream analysis can look valid while being wrong. That is why I spent most of the extra work on range validation, `.part` cleanup, and conservative resume semantics rather than adding unrelated features.

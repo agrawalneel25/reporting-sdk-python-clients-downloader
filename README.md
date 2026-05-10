@@ -4,6 +4,8 @@ This is my solution for the JetBrains Data Ingestion test task. It downloads a f
 
 The code uses only the JDK. I chose that to keep the submission easy to run: no Gradle, Maven, Docker, or external test dependency is needed for the core tests.
 
+For the tradeoffs and failure cases, see `DESIGN.md`. For the local benchmark, see `BENCHMARK.md`.
+
 ## How it works
 
 `ParallelFileDownloader` starts with a `HEAD` request. It requires two headers from the server:
@@ -44,6 +46,9 @@ PASS uses parallel range requests
 PASS retries transient chunk failure
 PASS does not overcount progress after retry
 PASS rejects server without range support
+PASS rejects missing HEAD content length
+PASS rejects range response with HTTP 200
+PASS rejects truncated chunk body
 PASS rejects wrong Content-Range
 PASS removes partial file after failure
 PASS resumes from completed chunks
@@ -76,6 +81,7 @@ Arguments:
 - `--attempts`, optional, default 3
 - `--timeout-seconds`, optional, default 30
 - `--resume`, optional, default false
+- `--sha256`, optional, expected final file digest
 
 ## Files
 
@@ -85,7 +91,7 @@ Arguments:
 - `src/test/java/dev/neel/downloader/ParallelFileDownloaderTest.java` - unit-style tests with a local range server
 - `src/test/java/dev/neel/downloader/DownloaderBenchmark.java` - local latency benchmark
 - `BENCHMARK.md` - benchmark method and measured output
-- `ENGINEERING_NOTES.md` - iteration notes, failure cases, and Data Ingestion framing
+- `DESIGN.md` - iteration notes, failure cases, and Data Ingestion framing
 
 ## Measured result
 
@@ -93,12 +99,12 @@ I added a local benchmark because the task is specifically about parallel chunki
 
 | Workers | Chunks | Time ms | SHA-256 ok |
 |---:|---:|---:|:---:|
-| 1 | 32 | 1398 | yes |
-| 2 | 32 | 570 | yes |
-| 4 | 32 | 299 | yes |
-| 8 | 32 | 179 | yes |
+| 1 | 32 | 1386 | yes |
+| 2 | 32 | 591 | yes |
+| 4 | 32 | 308 | yes |
+| 8 | 32 | 170 | yes |
 
-That is a 7.8x improvement from 1 worker to 8 workers in this controlled setup. The benchmark checks the SHA-256 hash after every run, so the speedup is not hiding a corrupted output file.
+That is an 8.2x improvement from 1 worker to 8 workers in this controlled setup. The benchmark checks the SHA-256 hash after every run, so the speedup is not hiding a corrupted output file.
 
 ## Limits
 

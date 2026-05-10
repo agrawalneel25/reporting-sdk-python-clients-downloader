@@ -21,6 +21,9 @@ public final class ParallelFileDownloaderTest {
                 new TestCase("retries transient chunk failure", ParallelFileDownloaderTest::retriesTransientChunkFailure),
                 new TestCase("does not overcount progress after retry", ParallelFileDownloaderTest::doesNotOvercountProgressAfterRetry),
                 new TestCase("rejects server without range support", ParallelFileDownloaderTest::rejectsServerWithoutRangeSupport),
+                new TestCase("rejects missing HEAD content length", ParallelFileDownloaderTest::rejectsMissingHeadContentLength),
+                new TestCase("rejects range response with HTTP 200", ParallelFileDownloaderTest::rejectsRangeResponseWithHttp200),
+                new TestCase("rejects truncated chunk body", ParallelFileDownloaderTest::rejectsTruncatedChunkBody),
                 new TestCase("rejects wrong Content-Range", ParallelFileDownloaderTest::rejectsWrongContentRange),
                 new TestCase("removes partial file after failure", ParallelFileDownloaderTest::removesPartialFileAfterFailure),
                 new TestCase("resumes from completed chunks", ParallelFileDownloaderTest::resumesFromCompletedChunks),
@@ -111,6 +114,62 @@ public final class ParallelFileDownloaderTest {
                     new ParallelFileDownloader(config).download(server.uri(), target)
             );
             assertTrue(error.getMessage().contains("byte range"), "unexpected error: " + error.getMessage());
+        }
+    }
+
+    private static void rejectsMissingHeadContentLength() throws Exception {
+        byte[] source = bytes(1024);
+        try (RangeHttpFixture server = RangeHttpFixture.start(source)) {
+            server.includeHeadContentLength(false);
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+
+            IOException error = expectThrows(IOException.class, () ->
+                    new ParallelFileDownloader(DownloadConfig.defaults()).download(server.uri(), target)
+            );
+            assertTrue(error.getMessage().contains("Content-Length"), "unexpected error: " + error.getMessage());
+        }
+    }
+
+    private static void rejectsRangeResponseWithHttp200() throws Exception {
+        byte[] source = bytes(2048);
+        try (RangeHttpFixture server = RangeHttpFixture.start(source)) {
+            server.returnOkForRanges(true);
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+
+            DownloadConfig config = DownloadConfig.builder()
+                    .chunkSizeBytes(512)
+                    .workers(2)
+                    .maxAttempts(1)
+                    .requestTimeout(Duration.ofSeconds(5))
+                    .build();
+
+            IOException error = expectThrows(IOException.class, () ->
+                    new ParallelFileDownloader(config).download(server.uri(), target)
+            );
+            assertTrue(error.getMessage().contains("HTTP 200"), "unexpected error: " + error.getMessage());
+        }
+    }
+
+    private static void rejectsTruncatedChunkBody() throws Exception {
+        byte[] source = bytes(2048);
+        try (RangeHttpFixture server = RangeHttpFixture.start(source)) {
+            server.truncateChunkBody(true);
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+
+            DownloadConfig config = DownloadConfig.builder()
+                    .chunkSizeBytes(512)
+                    .workers(2)
+                    .maxAttempts(1)
+                    .requestTimeout(Duration.ofSeconds(5))
+                    .build();
+
+            IOException error = expectThrows(IOException.class, () ->
+                    new ParallelFileDownloader(config).download(server.uri(), target)
+            );
+            assertTrue(error.getMessage().contains("expected"), "unexpected error: " + error.getMessage());
         }
     }
 

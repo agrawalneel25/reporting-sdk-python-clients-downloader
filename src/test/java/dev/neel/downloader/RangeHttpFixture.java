@@ -28,6 +28,9 @@ final class RangeHttpFixture implements AutoCloseable {
     private final List<Long> requestedStarts = Collections.synchronizedList(new ArrayList<>());
     private volatile boolean failFirstArmed;
     private volatile boolean advertiseRanges = true;
+    private volatile boolean includeHeadContentLength = true;
+    private volatile boolean returnOkForRanges;
+    private volatile boolean truncateChunkBody;
     private volatile boolean shiftContentRangeHeaderByOne;
     private volatile String etag = "\"fixture-v1\"";
     private volatile String lastModified = "Mon, 11 May 2026 12:00:00 GMT";
@@ -55,6 +58,18 @@ final class RangeHttpFixture implements AutoCloseable {
 
     void advertiseRanges(boolean advertiseRanges) {
         this.advertiseRanges = advertiseRanges;
+    }
+
+    void includeHeadContentLength(boolean includeHeadContentLength) {
+        this.includeHeadContentLength = includeHeadContentLength;
+    }
+
+    void returnOkForRanges(boolean returnOkForRanges) {
+        this.returnOkForRanges = returnOkForRanges;
+    }
+
+    void truncateChunkBody(boolean truncateChunkBody) {
+        this.truncateChunkBody = truncateChunkBody;
     }
 
     void sleepPerRequestMillis(int sleepPerRequestMillis) {
@@ -116,7 +131,9 @@ final class RangeHttpFixture implements AutoCloseable {
         if (advertiseRanges) {
             headers.add("Accept-Ranges", "bytes");
         }
-        headers.add("Content-Length", Integer.toString(content.length));
+        if (includeHeadContentLength) {
+            headers.add("Content-Length", Integer.toString(content.length));
+        }
         if (!etag.isBlank()) {
             headers.add("ETag", etag);
         }
@@ -150,10 +167,11 @@ final class RangeHttpFixture implements AutoCloseable {
             Headers headers = exchange.getResponseHeaders();
             headers.add("Accept-Ranges", "bytes");
             headers.add("Content-Range", "bytes " + headerStart + "-" + range.endInclusive() + "/" + content.length);
-            headers.add("Content-Length", Integer.toString(length));
-            exchange.sendResponseHeaders(206, length);
+            int bodyLength = truncateChunkBody ? Math.max(0, length - 1) : length;
+            headers.add("Content-Length", Integer.toString(bodyLength));
+            exchange.sendResponseHeaders(returnOkForRanges ? 200 : 206, bodyLength);
             try (OutputStream body = exchange.getResponseBody()) {
-                body.write(content, (int) range.start(), length);
+                body.write(content, (int) range.start(), bodyLength);
             }
         } finally {
             activeGets.decrementAndGet();

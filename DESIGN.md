@@ -1,6 +1,18 @@
-# Engineering Notes
+# Design Notes
 
 The base task is small: split a file into byte ranges, download those ranges in parallel, and assemble the output. I pushed on the parts that matter for a client library rather than adding unrelated surface area.
+
+## Flow
+
+```mermaid
+flowchart LR
+    Head["HEAD request"] --> Validate["validate Accept-Ranges and Content-Length"]
+    Validate --> Split["split into byte ranges"]
+    Split --> Get["parallel ranged GET requests"]
+    Get --> Check["validate 206, Content-Range, byte count"]
+    Check --> Write["write chunks at file offsets"]
+    Write --> Move["atomic move from .part to final file"]
+```
 
 ## Iteration
 
@@ -44,6 +56,7 @@ The downloader follows those constraints. It rejects inconsistent range metadata
 
 ## What I Did Not Add
 
-I did not add checksum verification against a server-published digest because the task server contract does not include one. If the server exposed `Digest`, `Content-MD5`, or a sidecar checksum endpoint, I would verify the final file before the atomic move.
+I did not add checksum verification against a server-published digest because the task server contract does not include one. The CLI does support `--sha256` when the caller already has an expected digest.
 
 I did not add adaptive chunk sizing. The benchmark shows parallelism is already visible under per-request latency, and adaptive sizing would need a larger measurement setup to be more than guesswork.
+

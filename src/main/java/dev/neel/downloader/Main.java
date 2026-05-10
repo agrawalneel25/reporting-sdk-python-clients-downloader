@@ -1,8 +1,11 @@
 package dev.neel.downloader;
 
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class Main {
@@ -13,7 +16,8 @@ public final class Main {
         CliArgs cli = CliArgs.parse(args);
         if (cli == null) {
             System.err.println("Usage: java dev.neel.downloader.Main <url> <output-path> "
-                    + "[--chunk-bytes N] [--workers N] [--attempts N] [--timeout-seconds N] [--resume true|false]");
+                    + "[--chunk-bytes N] [--workers N] [--attempts N] [--timeout-seconds N] "
+                    + "[--resume true|false] [--sha256 HEX]");
             System.exit(2);
         }
 
@@ -40,6 +44,17 @@ public final class Main {
         if (result.resumed()) {
             System.out.println("resumed from " + result.reusedChunks() + " completed chunks");
         }
+        if (!cli.sha256().isBlank()) {
+            String actual = sha256(result.destination());
+            if (!actual.equalsIgnoreCase(cli.sha256())) {
+                throw new IllegalStateException("SHA-256 mismatch: expected " + cli.sha256() + ", got " + actual);
+            }
+            System.out.println("sha256 verified: " + actual);
+        }
+    }
+
+    private static String sha256(Path path) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path)));
     }
 
     private record CliArgs(
@@ -49,7 +64,8 @@ public final class Main {
             int workers,
             int attempts,
             int timeoutSeconds,
-            boolean resume
+            boolean resume,
+            String sha256
     ) {
         static CliArgs parse(String[] args) {
             if (args.length < 2) {
@@ -63,6 +79,7 @@ public final class Main {
             int attempts = 3;
             int timeoutSeconds = 30;
             boolean resume = false;
+            String sha256 = "";
 
             int i = 2;
             while (i < args.length) {
@@ -78,6 +95,7 @@ public final class Main {
                         case "--attempts" -> attempts = Integer.parseInt(value);
                         case "--timeout-seconds" -> timeoutSeconds = Integer.parseInt(value);
                         case "--resume" -> resume = Boolean.parseBoolean(value);
+                        case "--sha256" -> sha256 = value;
                         default -> {
                             return null;
                         }
@@ -88,7 +106,7 @@ public final class Main {
                 i += 2;
             }
 
-            return new CliArgs(url, outputPath, chunkBytes, workers, attempts, timeoutSeconds, resume);
+            return new CliArgs(url, outputPath, chunkBytes, workers, attempts, timeoutSeconds, resume, sha256);
         }
     }
 }
