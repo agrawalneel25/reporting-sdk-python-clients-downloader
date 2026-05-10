@@ -38,6 +38,12 @@ From this folder:
 .\run-tests.ps1
 ```
 
+On Linux/macOS:
+
+```bash
+bash ./run-tests.sh
+```
+
 Expected output:
 
 ```text
@@ -69,7 +75,7 @@ Compile and run:
 
 ```powershell
 .\run-tests.ps1
-java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-bytes 1048576 --workers 8 --resume true
+java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-size 1MB --workers 8 --resume true
 ```
 
 Arguments:
@@ -77,6 +83,7 @@ Arguments:
 - URL
 - output path
 - `--chunk-bytes`, optional, default 1048576
+- `--chunk-size`, optional, accepts values like `64KB`, `1MB`, or `512B`
 - `--workers`, optional, default is at least 2
 - `--attempts`, optional, default 3
 - `--timeout-seconds`, optional, default 30
@@ -90,21 +97,23 @@ Arguments:
 - `src/main/java/dev/neel/downloader/Main.java` - small CLI wrapper
 - `src/test/java/dev/neel/downloader/ParallelFileDownloaderTest.java` - unit-style tests with a local range server
 - `src/test/java/dev/neel/downloader/DownloaderBenchmark.java` - local latency benchmark
+- `run-tests.ps1` / `run-tests.sh` - compile and run tests
+- `run-benchmark.ps1` / `run-benchmark.sh` - run the local latency benchmark
 - `BENCHMARK.md` - benchmark method and measured output
 - `DESIGN.md` - iteration notes, failure cases, and Data Ingestion framing
 
 ## Measured result
 
-I added a local benchmark because the task is specifically about parallel chunking. It serves an 8 MiB file from the in-process range server, splits it into 32 chunks, and adds 30 ms of delay per chunk response.
+I added a local benchmark because the task is specifically about parallel chunking. It serves an 8 MiB file from the in-process range server, splits it into 32 chunks, and adds 30 ms of delay per chunk response. Run it with `.\run-benchmark.ps1` on Windows or `bash ./run-benchmark.sh` on Linux/macOS.
 
 | Workers | Chunks | Time ms | SHA-256 ok |
 |---:|---:|---:|:---:|
-| 1 | 32 | 1386 | yes |
-| 2 | 32 | 591 | yes |
-| 4 | 32 | 308 | yes |
-| 8 | 32 | 170 | yes |
+| 1 | 32 | 1370 | yes |
+| 2 | 32 | 590 | yes |
+| 4 | 32 | 294 | yes |
+| 8 | 32 | 161 | yes |
 
-That is an 8.2x improvement from 1 worker to 8 workers in this controlled setup. The benchmark checks the SHA-256 hash after every run, so the speedup is not hiding a corrupted output file.
+That is an 8.5x improvement from 1 worker to 8 workers in this controlled setup. The benchmark checks the SHA-256 hash after every run, so the speedup is not hiding a corrupted output file.
 
 ## Limits
 

@@ -35,7 +35,7 @@ src/main/java/dev/neel/downloader/Main.java
 Example:
 
 ```powershell
-java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-bytes 1048576 --workers 8 --resume true
+java -cp out dev.neel.downloader.Main http://localhost:8080/my-local-file.txt downloaded.bin --chunk-size 1MB --workers 8 --resume true
 ```
 
 The tests are in:
@@ -91,11 +91,11 @@ It serves an 8 MiB file from the same in-process range server, splits it into 32
 
 | Workers | Chunks | Time ms | SHA-256 ok |
 |---:|---:|---:|:---:|
-| 1 | 32 | 1386 | yes |
-| 2 | 32 | 591 | yes |
-| 4 | 32 | 308 | yes |
-| 8 | 32 | 170 | yes |
+| 1 | 32 | 1370 | yes |
+| 2 | 32 | 590 | yes |
+| 4 | 32 | 294 | yes |
+| 8 | 32 | 161 | yes |
 
-That is about 8.2x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.
+That is about 8.5x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.
 
 The tie-in I had in mind for the Data Ingestion projects is that SDK downloads should fail loudly and be resumable when the server gives enough metadata. A reporting SDK client that silently accepts a corrupt export is worse than one that errors; downstream analysis can look valid while being wrong. That is why I spent most of the extra work on range validation, `.part` cleanup, and conservative resume semantics rather than adding unrelated features.

@@ -41,6 +41,7 @@ Final extension:
 - reuse completed chunks only when URL, length, chunk size, `ETag`, and `Last-Modified` match
 - keep the failure mode conservative when identity headers are missing
 - test both sides of that rule: resume with identity headers, start clean without them
+- cross-platform scripts and CI because reviewers may run the repo on either Windows or Linux
 
 ## Why This Matters For Data Ingestion
 
@@ -56,7 +57,6 @@ The downloader follows those constraints. It rejects inconsistent range metadata
 
 ## What I Did Not Add
 
-I did not add checksum verification against a server-published digest because the task server contract does not include one. The CLI does support `--sha256` when the caller already has an expected digest.
+I did not add checksum verification against a server-published digest because the task server contract does not include one. The CLI does support streaming `--sha256` verification when the caller already has an expected digest.
 
 I did not add adaptive chunk sizing. The benchmark shows parallelism is already visible under per-request latency, and adaptive sizing would need a larger measurement setup to be more than guesswork.
-

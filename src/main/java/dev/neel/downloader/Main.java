@@ -16,7 +16,7 @@ public final class Main {
         CliArgs cli = CliArgs.parse(args);
         if (cli == null) {
             System.err.println("Usage: java dev.neel.downloader.Main <url> <output-path> "
-                    + "[--chunk-bytes N] [--workers N] [--attempts N] [--timeout-seconds N] "
+                    + "[--chunk-bytes N|--chunk-size 64KB|2MB] [--workers N] [--attempts N] [--timeout-seconds N] "
                     + "[--resume true|false] [--sha256 HEX]");
             System.exit(2);
         }
@@ -54,7 +54,18 @@ public final class Main {
     }
 
     private static String sha256(Path path) throws Exception {
-        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path)));
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (var input = Files.newInputStream(path)) {
+            byte[] buffer = new byte[64 * 1024];
+            while (true) {
+                int read = input.read(buffer);
+                if (read == -1) {
+                    break;
+                }
+                digest.update(buffer, 0, read);
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     private record CliArgs(
@@ -91,6 +102,7 @@ public final class Main {
                 try {
                     switch (name) {
                         case "--chunk-bytes" -> chunkBytes = Integer.parseInt(value);
+                        case "--chunk-size" -> chunkBytes = parseByteSize(value);
                         case "--workers" -> workers = Integer.parseInt(value);
                         case "--attempts" -> attempts = Integer.parseInt(value);
                         case "--timeout-seconds" -> timeoutSeconds = Integer.parseInt(value);
@@ -107,6 +119,22 @@ public final class Main {
             }
 
             return new CliArgs(url, outputPath, chunkBytes, workers, attempts, timeoutSeconds, resume, sha256);
+        }
+
+        private static int parseByteSize(String value) {
+            String upper = value.trim().toUpperCase();
+            int multiplier = 1;
+            String number = upper;
+            if (upper.endsWith("KB")) {
+                multiplier = 1024;
+                number = upper.substring(0, upper.length() - 2);
+            } else if (upper.endsWith("MB")) {
+                multiplier = 1024 * 1024;
+                number = upper.substring(0, upper.length() - 2);
+            } else if (upper.endsWith("B")) {
+                number = upper.substring(0, upper.length() - 1);
+            }
+            return Math.multiplyExact(Integer.parseInt(number), multiplier);
         }
     }
 }
