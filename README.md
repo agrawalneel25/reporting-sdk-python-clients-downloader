@@ -1,8 +1,8 @@
 # Parallel Range Downloader
 
-This is my solution for the JetBrains Data Ingestion test task. It downloads a file from an HTTP server by splitting the byte range into chunks, fetching those chunks in parallel, and writing each chunk directly into the right offset in the output file.
+Downloads a file from an HTTP server by splitting the byte range into chunks, fetching those chunks in parallel, and writing each chunk directly into the right offset in the output file.
 
-The code uses only the JDK. I chose that to keep the submission easy to run: no Gradle, Maven, Docker, or external test dependency is needed for the core tests.
+The code uses only the JDK — no Gradle, Maven, Docker, or external test dependency needed for the core tests.
 
 For the tradeoffs and failure cases, see `DESIGN.md`. For the local benchmark, see `BENCHMARK.md`.
 
@@ -23,12 +23,12 @@ Every chunk is written through `FileChannel.write(buffer, offset)`, so the downl
 
 ## Design choices
 
-I made three choices deliberately:
+Four design choices worth noting:
 
 - Direct offset writes instead of download-then-concat. That keeps memory bounded by worker count and buffer size, not file size.
-- A strict server contract. The task says the server supports `HEAD`, `Accept-Ranges`, `Content-Length`, and ranged `GET`; the downloader rejects responses that drift from that contract instead of silently accepting a corrupt file.
-- Resume only when safe. The optional resume mode reuses a `.part` file only when the sidecar manifest matches the URL, length, chunk size, `ETag`, and `Last-Modified`.
-- No external build dependency. The repo compiles with only the JDK, which makes review simpler on a fresh machine.
+- Strict server contract validation. The downloader requires `HEAD`, `Accept-Ranges`, `Content-Length`, and ranged `GET`; it rejects responses that drift from that contract instead of silently accepting a corrupt file.
+- Conservative resume. The optional resume mode reuses a `.part` file only when the sidecar manifest matches the URL, length, chunk size, `ETag`, and `Last-Modified`.
+- No external build dependency. The repo compiles with only the JDK, so it runs cleanly on any machine with Java 11+.
 
 ## Run the tests
 

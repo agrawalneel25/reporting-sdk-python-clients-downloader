@@ -98,4 +98,4 @@ It serves an 8 MiB file from the same in-process range server, splits it into 32
 
 That is about 8.5x faster with 8 workers than with 1 worker in this controlled setup. The benchmark verifies the SHA-256 hash after each run, so it checks both speed and correctness.
 
-The tie-in I had in mind for the Data Ingestion projects is that SDK downloads should fail loudly and be resumable when the server gives enough metadata. A reporting SDK client that silently accepts a corrupt export is worse than one that errors; downstream analysis can look valid while being wrong. That is why I spent most of the extra work on range validation, `.part` cleanup, and conservative resume semantics rather than adding unrelated features.
+For a reporting SDK client, the download is not just transport — it is usually the step before a notebook or batch job reads the export and treats it as ground truth. A corrupt but complete-looking file is worse than a failed download. That is why the extra work went into range validation, `.part` cleanup, and conservative resume semantics rather than unrelated features.
