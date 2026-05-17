@@ -125,15 +125,31 @@ public final class Main {
             String upper = value.trim().toUpperCase();
             int multiplier = 1;
             String number = upper;
-            if (upper.endsWith("KB")) {
+            if (upper.endsWith("GIB")) {
+                multiplier = 1024 * 1024 * 1024;
+                number = upper.substring(0, upper.length() - 3);
+            } else if (upper.endsWith("MIB")) {
+                multiplier = 1024 * 1024;
+                number = upper.substring(0, upper.length() - 3);
+            } else if (upper.endsWith("KIB")) {
                 multiplier = 1024;
+                number = upper.substring(0, upper.length() - 3);
+            } else if (upper.endsWith("GB")) {
+                multiplier = 1024 * 1024 * 1024;
                 number = upper.substring(0, upper.length() - 2);
             } else if (upper.endsWith("MB")) {
                 multiplier = 1024 * 1024;
                 number = upper.substring(0, upper.length() - 2);
+            } else if (upper.endsWith("KB")) {
+                multiplier = 1024;
+                number = upper.substring(0, upper.length() - 2);
+            } else if (upper.endsWith("G")) {
+                multiplier = 1024 * 1024 * 1024;
+                number = upper.substring(0, upper.length() - 1);
             } else if (upper.endsWith("B")) {
                 number = upper.substring(0, upper.length() - 1);
             }
+            // Note: chunk size is stored as int; values >= 2 GiB will overflow and are rejected by multiplyExact.
             return Math.multiplyExact(Integer.parseInt(number), multiplier);
         }
     }

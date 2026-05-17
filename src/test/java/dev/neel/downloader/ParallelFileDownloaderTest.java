@@ -27,7 +27,8 @@ public final class ParallelFileDownloaderTest {
                 new TestCase("rejects wrong Content-Range", ParallelFileDownloaderTest::rejectsWrongContentRange),
                 new TestCase("removes partial file after failure", ParallelFileDownloaderTest::removesPartialFileAfterFailure),
                 new TestCase("resumes from completed chunks", ParallelFileDownloaderTest::resumesFromCompletedChunks),
-                new TestCase("does not resume without identity headers", ParallelFileDownloaderTest::doesNotResumeWithoutIdentityHeaders)
+                new TestCase("does not resume without identity headers", ParallelFileDownloaderTest::doesNotResumeWithoutIdentityHeaders),
+                new TestCase("downloads single chunk when content smaller than chunk size", ParallelFileDownloaderTest::downloadsSingleChunkWhenContentSmallerThanChunkSize)
         );
 
         for (TestCase test : tests) {
@@ -41,20 +42,25 @@ public final class ParallelFileDownloaderTest {
         try (RangeHttpFixture server = RangeHttpFixture.start(source)) {
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(64 * 1024)
+                        .workers(6)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(64 * 1024)
-                    .workers(6)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .build();
+                DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
+                byte[] actual = Files.readAllBytes(target);
 
-            DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
-            byte[] actual = Files.readAllBytes(target);
-
-            assertEquals(source.length, result.bytesDownloaded(), "bytesDownloaded");
-            assertTrue(result.chunkCount() > 1, "expected multiple chunks");
-            assertArrayEquals(source, actual, "downloaded bytes changed");
-            assertEquals(sha256(source), sha256(actual), "sha256");
+                assertEquals(source.length, result.bytesDownloaded(), "bytesDownloaded");
+                assertTrue(result.chunkCount() > 1, "expected multiple chunks");
+                assertArrayEquals(source, actual, "downloaded bytes changed");
+                assertEquals(sha256(source), sha256(actual), "sha256");
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -64,16 +70,21 @@ public final class ParallelFileDownloaderTest {
             server.sleepPerRequestMillis(80);
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(32 * 1024)
+                        .workers(8)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(32 * 1024)
-                    .workers(8)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .build();
-
-            new ParallelFileDownloader(config).download(server.uri(), target);
-            assertTrue(server.maxConcurrentGets() > 1, "server only saw one GET at a time");
-            assertArrayEquals(source, Files.readAllBytes(target), "parallel download was corrupt");
+                new ParallelFileDownloader(config).download(server.uri(), target);
+                assertTrue(server.maxConcurrentGets() > 1, "server only saw one GET at a time");
+                assertArrayEquals(source, Files.readAllBytes(target), "parallel download was corrupt");
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -83,17 +94,22 @@ public final class ParallelFileDownloaderTest {
             server.failFirstGetForStart(0);
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(100_000)
+                        .workers(3)
+                        .maxAttempts(2)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(100_000)
-                    .workers(3)
-                    .maxAttempts(2)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .build();
-
-            new ParallelFileDownloader(config).download(server.uri(), target);
-            assertArrayEquals(source, Files.readAllBytes(target), "retry download was corrupt");
-            assertTrue(server.getCount() > 3, "expected one extra GET after retry");
+                new ParallelFileDownloader(config).download(server.uri(), target);
+                assertArrayEquals(source, Files.readAllBytes(target), "retry download was corrupt");
+                assertTrue(server.getCount() > 3, "expected one extra GET after retry");
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -103,17 +119,22 @@ public final class ParallelFileDownloaderTest {
             server.advertiseRanges(false);
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(128)
+                        .workers(2)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(128)
-                    .workers(2)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .build();
-
-            IOException error = expectThrows(IOException.class, () ->
-                    new ParallelFileDownloader(config).download(server.uri(), target)
-            );
-            assertTrue(error.getMessage().contains("byte range"), "unexpected error: " + error.getMessage());
+                IOException error = expectThrows(IOException.class, () ->
+                        new ParallelFileDownloader(config).download(server.uri(), target)
+                );
+                assertTrue(error.getMessage().contains("byte range"), "unexpected error: " + error.getMessage());
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -123,11 +144,16 @@ public final class ParallelFileDownloaderTest {
             server.includeHeadContentLength(false);
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
-
-            IOException error = expectThrows(IOException.class, () ->
-                    new ParallelFileDownloader(DownloadConfig.defaults()).download(server.uri(), target)
-            );
-            assertTrue(error.getMessage().contains("Content-Length"), "unexpected error: " + error.getMessage());
+            try {
+                IOException error = expectThrows(IOException.class, () ->
+                        new ParallelFileDownloader(DownloadConfig.defaults()).download(server.uri(), target)
+                );
+                assertTrue(error.getMessage().contains("Content-Length"), "unexpected error: " + error.getMessage());
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -137,18 +163,23 @@ public final class ParallelFileDownloaderTest {
             server.returnOkForRanges(true);
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(512)
+                        .workers(2)
+                        .maxAttempts(1)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(512)
-                    .workers(2)
-                    .maxAttempts(1)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .build();
-
-            IOException error = expectThrows(IOException.class, () ->
-                    new ParallelFileDownloader(config).download(server.uri(), target)
-            );
-            assertTrue(error.getMessage().contains("HTTP 200"), "unexpected error: " + error.getMessage());
+                IOException error = expectThrows(IOException.class, () ->
+                        new ParallelFileDownloader(config).download(server.uri(), target)
+                );
+                assertTrue(error.getMessage().contains("HTTP 200"), "unexpected error: " + error.getMessage());
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -158,18 +189,23 @@ public final class ParallelFileDownloaderTest {
             server.truncateChunkBody(true);
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(512)
+                        .workers(2)
+                        .maxAttempts(1)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(512)
-                    .workers(2)
-                    .maxAttempts(1)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .build();
-
-            IOException error = expectThrows(IOException.class, () ->
-                    new ParallelFileDownloader(config).download(server.uri(), target)
-            );
-            assertTrue(error.getMessage().contains("expected"), "unexpected error: " + error.getMessage());
+                IOException error = expectThrows(IOException.class, () ->
+                        new ParallelFileDownloader(config).download(server.uri(), target)
+                );
+                assertTrue(error.getMessage().contains("expected"), "unexpected error: " + error.getMessage());
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -180,17 +216,22 @@ public final class ParallelFileDownloaderTest {
             AtomicLong progress = new AtomicLong();
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(100_000)
+                        .workers(3)
+                        .maxAttempts(2)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .progressListener(progress::set)
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(100_000)
-                    .workers(3)
-                    .maxAttempts(2)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .progressListener(progress::set)
-                    .build();
-
-            new ParallelFileDownloader(config).download(server.uri(), target);
-            assertEquals(source.length, progress.get(), "progress");
+                new ParallelFileDownloader(config).download(server.uri(), target);
+                assertEquals(source.length, progress.get(), "progress");
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -200,18 +241,23 @@ public final class ParallelFileDownloaderTest {
             server.shiftContentRangeHeaderByOne(true);
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(512)
+                        .workers(2)
+                        .maxAttempts(1)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(512)
-                    .workers(2)
-                    .maxAttempts(1)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .build();
-
-            IOException error = expectThrows(IOException.class, () ->
-                    new ParallelFileDownloader(config).download(server.uri(), target)
-            );
-            assertTrue(error.getMessage().contains("Content-Range"), "unexpected error: " + error.getMessage());
+                IOException error = expectThrows(IOException.class, () ->
+                        new ParallelFileDownloader(config).download(server.uri(), target)
+                );
+                assertTrue(error.getMessage().contains("Content-Range"), "unexpected error: " + error.getMessage());
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -222,18 +268,23 @@ public final class ParallelFileDownloaderTest {
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
             Path partial = target.resolveSibling(target.getFileName() + ".part");
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(512)
+                        .workers(2)
+                        .maxAttempts(1)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(512)
-                    .workers(2)
-                    .maxAttempts(1)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .build();
-
-            expectThrows(IOException.class, () ->
-                    new ParallelFileDownloader(config).download(server.uri(), target)
-            );
-            assertTrue(!Files.exists(partial), "partial file was left behind: " + partial);
+                expectThrows(IOException.class, () ->
+                        new ParallelFileDownloader(config).download(server.uri(), target)
+                );
+                assertTrue(!Files.exists(partial), "partial file was left behind: " + partial);
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(partial);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -244,31 +295,36 @@ public final class ParallelFileDownloaderTest {
             Files.deleteIfExists(target);
             Path partial = target.resolveSibling(target.getFileName() + ".part");
             Path manifest = target.resolveSibling(target.getFileName() + ".part.manifest");
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(100_000)
+                        .workers(1)
+                        .maxAttempts(1)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .resumeEnabled(true)
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(100_000)
-                    .workers(1)
-                    .maxAttempts(1)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .resumeEnabled(true)
-                    .build();
+                server.failEveryGetForStart(100_000);
+                expectThrows(IOException.class, () ->
+                        new ParallelFileDownloader(config).download(server.uri(), target)
+                );
+                assertTrue(Files.exists(partial), "resume partial file missing");
+                assertTrue(Files.exists(manifest), "resume manifest missing");
+                int firstRunRequests = server.requestedStarts().size();
 
-            server.failEveryGetForStart(100_000);
-            expectThrows(IOException.class, () ->
-                    new ParallelFileDownloader(config).download(server.uri(), target)
-            );
-            assertTrue(Files.exists(partial), "resume partial file missing");
-            assertTrue(Files.exists(manifest), "resume manifest missing");
-            int firstRunRequests = server.requestedStarts().size();
+                server.stopFailingEveryGet();
+                DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
 
-            server.stopFailingEveryGet();
-            DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
-
-            assertArrayEquals(source, Files.readAllBytes(target), "resumed download was corrupt");
-            assertTrue(result.resumed(), "result did not report resume");
-            assertTrue(result.reusedChunks() >= 1, "expected at least one reused chunk");
-            List<Long> secondRunStarts = server.requestedStarts().subList(firstRunRequests, server.requestedStarts().size());
-            assertTrue(!secondRunStarts.contains(0L), "second run re-requested the completed first chunk");
+                assertArrayEquals(source, Files.readAllBytes(target), "resumed download was corrupt");
+                assertTrue(result.resumed(), "result did not report resume");
+                assertTrue(result.reusedChunks() >= 1, "expected at least one reused chunk");
+                List<Long> secondRunStarts = server.requestedStarts().subList(firstRunRequests, server.requestedStarts().size());
+                assertTrue(!secondRunStarts.contains(0L), "second run re-requested the completed first chunk");
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(partial);
+                Files.deleteIfExists(manifest);
+            }
         }
     }
 
@@ -278,28 +334,59 @@ public final class ParallelFileDownloaderTest {
             server.identityHeaders("", "");
             Path target = Files.createTempFile("parallel-download", ".bin");
             Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(100_000)
+                        .workers(1)
+                        .maxAttempts(1)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .resumeEnabled(true)
+                        .build();
 
-            DownloadConfig config = DownloadConfig.builder()
-                    .chunkSizeBytes(100_000)
-                    .workers(1)
-                    .maxAttempts(1)
-                    .requestTimeout(Duration.ofSeconds(5))
-                    .resumeEnabled(true)
-                    .build();
+                server.failEveryGetForStart(100_000);
+                expectThrows(IOException.class, () ->
+                        new ParallelFileDownloader(config).download(server.uri(), target)
+                );
+                int firstRunRequests = server.requestedStarts().size();
 
-            server.failEveryGetForStart(100_000);
-            expectThrows(IOException.class, () ->
-                    new ParallelFileDownloader(config).download(server.uri(), target)
-            );
-            int firstRunRequests = server.requestedStarts().size();
+                server.stopFailingEveryGet();
+                DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
 
-            server.stopFailingEveryGet();
-            DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
+                assertArrayEquals(source, Files.readAllBytes(target), "fresh retry was corrupt");
+                assertTrue(!result.resumed(), "download resumed without identity headers");
+                List<Long> secondRunStarts = server.requestedStarts().subList(firstRunRequests, server.requestedStarts().size());
+                assertTrue(secondRunStarts.contains(0L), "fresh retry did not request the first chunk");
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
+        }
+    }
 
-            assertArrayEquals(source, Files.readAllBytes(target), "fresh retry was corrupt");
-            assertTrue(!result.resumed(), "download resumed without identity headers");
-            List<Long> secondRunStarts = server.requestedStarts().subList(firstRunRequests, server.requestedStarts().size());
-            assertTrue(secondRunStarts.contains(0L), "fresh retry did not request the first chunk");
+    private static void downloadsSingleChunkWhenContentSmallerThanChunkSize() throws Exception {
+        byte[] source = bytes(1024);
+        try (RangeHttpFixture server = RangeHttpFixture.start(source)) {
+            Path target = Files.createTempFile("parallel-download", ".bin");
+            Files.deleteIfExists(target);
+            try {
+                DownloadConfig config = DownloadConfig.builder()
+                        .chunkSizeBytes(64 * 1024)
+                        .workers(4)
+                        .requestTimeout(Duration.ofSeconds(5))
+                        .build();
+
+                DownloadResult result = new ParallelFileDownloader(config).download(server.uri(), target);
+                byte[] actual = Files.readAllBytes(target);
+
+                assertEquals(1, result.chunkCount(), "expected exactly one chunk");
+                assertEquals(1, server.getCount(), "expected exactly one GET request");
+                assertArrayEquals(source, actual, "single-chunk downloaded bytes differ");
+            } finally {
+                Files.deleteIfExists(target);
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part"));
+                Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".part.manifest"));
+            }
         }
     }
 
@@ -317,7 +404,10 @@ public final class ParallelFileDownloaderTest {
 
     private static void assertArrayEquals(byte[] expected, byte[] actual, String message) {
         if (!Arrays.equals(expected, actual)) {
-            throw new AssertionError(message + ": expected " + expected.length + " bytes, got " + actual.length);
+            int mismatch = Arrays.mismatch(expected, actual);
+            throw new AssertionError(message + ": arrays differ at index " + mismatch +
+                    " (expected " + expected[mismatch] + ", got " + actual[mismatch] +
+                    "); lengths: " + expected.length + " vs " + actual.length);
         }
     }
 

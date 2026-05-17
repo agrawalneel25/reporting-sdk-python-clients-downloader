@@ -75,8 +75,10 @@ public final class ParallelFileDownloader {
             }
             completed = true;
         } finally {
-            executor.shutdownNow();
-            if (!completed) {
+            if (completed) {
+                executor.shutdown();
+            } else {
+                executor.shutdownNow();
                 if (!config.resumeEnabled()) {
                     Files.deleteIfExists(partial);
                     Files.deleteIfExists(manifestPath);
@@ -139,7 +141,7 @@ public final class ParallelFileDownloader {
         if (!config.resumeEnabled()) {
             Files.deleteIfExists(partial);
             Files.deleteIfExists(manifestPath);
-            return ResumeManifest.fresh(source, remoteFile, chunks, manifestPath, config.chunkSizeBytes());
+            return ResumeManifest.fresh(source, remoteFile, manifestPath, config.chunkSizeBytes());
         }
 
         ResumeManifest existing = ResumeManifest.loadIfMatching(
@@ -155,7 +157,7 @@ public final class ParallelFileDownloader {
 
         Files.deleteIfExists(partial);
         Files.deleteIfExists(manifestPath);
-        return ResumeManifest.fresh(source, remoteFile, chunks, manifestPath, config.chunkSizeBytes());
+        return ResumeManifest.fresh(source, remoteFile, manifestPath, config.chunkSizeBytes());
     }
 
     private Callable<Void> downloadChunk(
@@ -247,24 +249,30 @@ public final class ParallelFileDownloader {
     }
 
     private static void waitForAll(List<Future<Void>> futures) throws IOException, InterruptedException {
-        IOException failure = null;
+        IOException first = null;
         for (Future<Void> future : futures) {
             try {
                 future.get();
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();
-                if (cause instanceof IOException io) {
-                    failure = io;
+                IOException io;
+                if (cause instanceof IOException ioEx) {
+                    io = ioEx;
                 } else if (cause instanceof InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw interrupted;
                 } else {
-                    failure = new IOException(cause);
+                    io = new IOException(cause);
+                }
+                if (first == null) {
+                    first = io;
+                } else {
+                    first.addSuppressed(io);
                 }
             }
         }
-        if (failure != null) {
-            throw failure;
+        if (first != null) {
+            throw first;
         }
     }
 
@@ -356,7 +364,6 @@ public final class ParallelFileDownloader {
         static ResumeManifest fresh(
                 URI source,
                 RemoteFile remoteFile,
-                List<Chunk> chunks,
                 Path manifestPath,
                 int chunkSizeBytes
         ) throws IOException {

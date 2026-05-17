@@ -10,6 +10,7 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.ArrayList;
@@ -26,7 +27,7 @@ final class RangeHttpFixture implements AutoCloseable {
     private final AtomicLong failFirstStart = new AtomicLong(-1);
     private final AtomicLong failAlwaysStart = new AtomicLong(-1);
     private final List<Long> requestedStarts = Collections.synchronizedList(new ArrayList<>());
-    private volatile boolean failFirstArmed;
+    private final AtomicBoolean failFirstArmed = new AtomicBoolean();
     private volatile boolean advertiseRanges = true;
     private volatile boolean includeHeadContentLength = true;
     private volatile boolean returnOkForRanges;
@@ -78,7 +79,7 @@ final class RangeHttpFixture implements AutoCloseable {
 
     void failFirstGetForStart(long start) {
         failFirstStart.set(start);
-        failFirstArmed = true;
+        failFirstArmed.set(true);
     }
 
     void failEveryGetForStart(long start) {
@@ -179,11 +180,7 @@ final class RangeHttpFixture implements AutoCloseable {
     }
 
     private boolean shouldFailOnce(long start) {
-        if (failFirstArmed && failFirstStart.get() == start) {
-            failFirstArmed = false;
-            return true;
-        }
-        return false;
+        return failFirstArmed.compareAndSet(true, false) && failFirstStart.get() == start;
     }
 
     private Range parseRange(String header) {
